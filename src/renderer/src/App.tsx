@@ -1,11 +1,21 @@
 import { useEffect, useRef, useState, type JSX } from "react";
-import { motion, AnimatePresence } from "motion/react";
-import { Microphone, WaveformSlash, MagicWand } from "@phosphor-icons/react";
+import { motion } from "motion/react";
+import {
+  Microphone,
+  WaveformSlash,
+  GearSix,
+  MagicWand,
+} from "@phosphor-icons/react";
 
 type State = "idle" | "listening" | "working" | "error";
 
+const smooth = {
+  type: "tween",
+  duration: 0.32,
+  ease: [0.32, 0.72, 0, 1],
+} as const;
+
 export default function App(): JSX.Element {
-  const QA = typeof location !== "undefined" && location.search.includes("qa");
   const [state, setState] = useState<State>(
     location.search.includes("live")
       ? "listening"
@@ -13,11 +23,13 @@ export default function App(): JSX.Element {
         ? "working"
         : "idle",
   );
-  const [partial, setPartial] = useState("");
   const [level, setLevel] = useState(0);
+  const barsRef = useRef<(HTMLSpanElement | null)[]>([]);
+  const [hover, setHover] = useState(false);
   const streamRef = useRef<MediaStream | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
   const procRef = useRef<ScriptProcessorNode | null>(null);
+  const ampRef = useRef(0);
 
   async function startCapture(): Promise<void> {
     try {
@@ -57,7 +69,6 @@ export default function App(): JSX.Element {
 
   useEffect(() => {
     window.api.onState((s: string) => setState(s as State));
-    window.api.onPartial((t: string) => setPartial(t));
   }, []);
 
   useEffect(() => {
@@ -70,98 +81,164 @@ export default function App(): JSX.Element {
     return () => stopCapture();
   }, [state]);
 
+  useEffect(() => {
+    let raf = 0;
+    const tick = (): void => {
+      ampRef.current += (level - ampRef.current) * 0.22;
+      barsRef.current.forEach((el, i) => {
+        if (el)
+          el.style.height = `${Math.max(4, ampRef.current * (14 + 10 * Math.abs(Math.sin(i * 1.1))))}px`;
+      });
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [level]);
+
   return (
-    <motion.div
-      layout
-      className="capsule"
-      onClick={() => window.api.toggle()}
-      style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
-    >
-      <style>{glass}</style>
-      <AnimatePresence mode="wait">
-        {state === "idle" && (
+    <>
+      {/* Bottom STT pill */}
+      <motion.div
+        animate={{
+          width:
+            state === "idle" && !hover
+              ? 36
+              : state === "idle" && hover
+                ? 84
+                : state === "listening"
+                  ? 132
+                  : state === "working"
+                    ? 64
+                    : 110,
+          height: state === "idle" && !hover ? 12 : 40,
+        }}
+        transition={smooth}
+        style={{ left: "50%", x: "-50%", bottom: 8 }}
+        className="pill"
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+      >
+        <style>{css}</style>
+        {state === "idle" && !hover && (
+          <motion.span
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="mini-handle"
+          />
+        )}
+        {state === "idle" && hover && (
           <motion.div
-            key="idle"
-            initial={QA ? false : { opacity: 0, scale: 0.8 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0 }}
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
             className="row"
           >
-            <Microphone size={18} weight="duotone" />
-            <span>Ready</span>
+            <TrayButton label="Transcript" onClick={() => window.api.toggle()}>
+              <Microphone size={17} weight="duotone" />
+            </TrayButton>
+            <TrayButton label="Settings" onClick={() => {}}>
+              <GearSix size={17} weight="duotone" />
+            </TrayButton>
           </motion.div>
         )}
         {state === "listening" && (
-          <motion.div
-            key="live"
-            initial={QA ? false : { opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="row"
-          >
-            <motion.span
-              animate={{ scale: [1, 1 + level * 0.6, 1] }}
-              transition={{ duration: 0.25 }}
-              className="dot"
-            />
-            <div className="bars">
-              {[0, 1, 2, 3, 4].map((i) => (
-                <motion.span
-                  key={i}
-                  animate={{ height: 6 + level * (10 + i * 4) }}
-                  transition={{ type: "spring", stiffness: 300, damping: 20 }}
-                />
-              ))}
-            </div>
-            <span className="partial">{partial || "Listening…"}</span>
-          </motion.div>
+          <div className="row wave">
+            {Array.from({ length: 7 }).map((_, i) => (
+              <span
+                key={i}
+                ref={(el) => {
+                  barsRef.current[i] = el;
+                }}
+                style={{ height: 4 }}
+              />
+            ))}
+          </div>
         )}
         {state === "working" && (
-          <motion.div
-            key="work"
-            initial={QA ? false : { opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="row"
-          >
+          <div className="row">
             <motion.span
-              animate={{ rotate: 360 }}
-              transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
+              animate={{ opacity: [0.5, 1, 0.5] }}
+              transition={{ repeat: Infinity, duration: 1.2 }}
             >
-              <MagicWand size={18} weight="duotone" />
+              <MagicWand size={17} weight="duotone" />
             </motion.span>
-            <span>Polishing…</span>
-          </motion.div>
+          </div>
         )}
         {state === "error" && (
-          <motion.div
-            key="err"
-            initial={QA ? false : { opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="row"
-          >
-            <WaveformSlash size={18} />
-            <span>Mic unavailable</span>
-          </motion.div>
+          <div className="row">
+            <WaveformSlash size={17} />
+            <span className="err">Mic unavailable</span>
+          </div>
         )}
-      </AnimatePresence>
-    </motion.div>
+      </motion.div>
+    </>
   );
 }
 
-const glass = `
-.capsule {
-  display: flex; align-items: center; padding: 10px 18px; border-radius: 999px;
-  background: linear-gradient(135deg, rgba(255,255,255,0.18), rgba(255,255,255,0.06));
-  backdrop-filter: blur(24px) saturate(160%);
-  -webkit-backdrop-filter: blur(24px) saturate(160%);
-  border: 1px solid rgba(255,255,255,0.35);
-  box-shadow: 0 8px 32px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.4);
-  color: white; font-size: 13px; cursor: grab; user-select: none;
+function TrayButton({
+  children,
+  label,
+  onClick,
+}: {
+  children: React.ReactNode;
+  label: string;
+  onClick: () => void;
+}): JSX.Element {
+  return (
+    <motion.button
+      whileHover={{ scale: 1.08 }}
+      whileTap={{ scale: 0.94 }}
+      transition={{ type: "tween", duration: 0.15 }}
+      className="tray-btn"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+    >
+      {children}
+    </motion.button>
+  );
 }
-.row { display: flex; align-items: center; gap: 10px; }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: #ff5f57; display: inline-block; }
-.bars { display: flex; align-items: center; gap: 3px; }
-.bars span { width: 3px; border-radius: 2px; background: rgba(255,255,255,0.85); display: inline-block; }
-.partial { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.9; }
+
+const css = `
+.pill {
+  position: fixed;
+  padding: 0; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 28px;
+  background: rgba(28,28,30,0.55);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  border: 1px solid rgba(255,255,255,0.14);
+  box-shadow: 0 4px 18px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.12);
+  color: #fff; cursor: grab; user-select: none;
+  transform: translateZ(0);
+}
+.mini-handle { width: 22px; height: 4px; border-radius: 999px; background: rgba(255,255,255,0.16); }
+.row { display: flex; align-items: center; gap: 8px; }
+.err { font-size: 11px; opacity: 0.8; }
+.wave { height: 24px; align-items: center; gap: 3px; }
+.wave span { width: 3px; border-radius: 2px; background: rgba(255,255,255,0.85); display: inline-block; }
+.tray-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.16); background: rgba(255,255,255,0.07);
+  color: white; cursor: pointer; -webkit-app-region: no-drag;
+}
+  position: fixed; top: 50%; right: 10px;
+  transform: translateY(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 10px 8px; border-radius: 28px;
+  background: rgba(28,28,30,0.55);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  border: 1px solid rgba(255,255,255,0.14);
+  box-shadow: 0 4px 18px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.12);
+}
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.06);
+  color: white; display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+}
+
+
+
 `;

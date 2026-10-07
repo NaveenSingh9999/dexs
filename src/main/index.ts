@@ -83,6 +83,8 @@ function toggle(): void {
     session = new Session(settings, {
       onState: (s: SessionState) => overlay?.webContents.send("dexs:state", s),
       onPartial: (t) => overlay?.webContents.send("dexs:partial", t),
+      onUtterance: (t) => overlay?.webContents.send("dexs:utterance", t),
+      onError: (m) => overlay?.webContents.send("dexs:error", m),
     });
     session.start();
   } else {

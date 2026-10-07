@@ -16,6 +16,10 @@ const api = {
     ipcRenderer.on("dexs:state", (_e, s) => cb(s)),
   onPartial: (cb: (t: string) => void) =>
     ipcRenderer.on("dexs:partial", (_e, t) => cb(t)),
+  onUtterance: (cb: (t: string) => void) =>
+    ipcRenderer.on("dexs:utterance", (_e, t) => cb(t)),
+  onError: (cb: (m: string) => void) =>
+    ipcRenderer.on("dexs:error", (_e, m) => cb(m)),
   getSettings: () => ipcRenderer.invoke("dexs:settings"),
   setSettings: (s: unknown) => ipcRenderer.send("dexs:settings:set", s),
 };

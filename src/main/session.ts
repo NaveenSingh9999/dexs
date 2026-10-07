@@ -1,8 +1,7 @@
-import { vadSegment } from "../core/vad";
 import { planCorrection } from "../core/differ";
-import { createInjector, applyCorrection } from "./injector";
+import { createInjector, applyCorrection, type Injector } from "./injector";
 import { VoskStream, transcribeWhisper } from "./stt";
-import { mkdtempSync, writeFileSync } from "fs";
+import { mkdtempSync, writeFileSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import type { DexsSettings, SessionState } from "../core/types";
@@ -10,29 +9,39 @@ import type { DexsSettings, SessionState } from "../core/types";
 export interface SessionCallbacks {
   onState(s: SessionState): void;
   onPartial(text: string): void;
+  onUtterance(text: string): void;
+  onError(msg: string): void;
 }
+
+const RMS_THRESHOLD = 500;
+const HANGOVER_FRAMES = 14; // ~420ms at 30ms frames
+const MAX_UTTERANCE_MS = 15000;
+const FRAME = 480; // 30ms @ 16kHz
 
 export class Session {
   private vosk: VoskStream | null = null;
-  private typedForSegment = "";
-  private allTyped = "";
-  private segmentAudio: number[] = [];
-  private cb: SessionCallbacks;
+  private injector: Injector = createInjector();
+  private typedThisUtterance = "";
+  private buffer: number[] = [];
+  private speaking = false;
+  private silenceFrames = 0;
   private running = false;
+  private whisperBusy = false;
+  private voskDead = false;
 
   constructor(
     private settings: DexsSettings,
-    cb: SessionCallbacks,
-  ) {
-    this.cb = cb;
-  }
+    private cb: SessionCallbacks,
+  ) {}
 
   start(): void {
     if (this.running) return;
     this.running = true;
-    this.typedForSegment = "";
-    this.allTyped = "";
-    this.segmentAudio = [];
+    this.speaking = false;
+    this.silenceFrames = 0;
+    this.buffer = [];
+    this.typedThisUtterance = "";
+    this.voskDead = false;
     this.cb.onState("listening");
     try {
       this.vosk = new VoskStream(
@@ -45,22 +54,103 @@ export class Session {
           this.cb.onPartial(c.text);
           return;
         }
-        const injector = createInjector();
-        injector.type(c.text).then(() => {
-          this.typedForSegment += c.text;
-          this.allTyped += c.text;
-        });
+        this.injector
+          .type(c.text)
+          .then(() => {
+            this.typedThisUtterance += c.text;
+          })
+          .catch(() => this.cb.onError("type failed"));
       });
       this.vosk.start();
+      this.vosk.onError(() => {
+        this.voskDead = true;
+        this.vosk = null;
+        this.cb.onError("Vosk unavailable, using basic mode");
+      });
     } catch {
       this.vosk = null;
+      this.voskDead = true;
+      this.cb.onError("Vosk unavailable, using basic mode");
     }
   }
 
   feed(pcm16: Int16Array): void {
     if (!this.running) return;
-    this.segmentAudio.push(...pcm16);
     this.vosk?.feed(pcm16);
+    this.buffer.push(...pcm16);
+    if (!this.speaking && this.buffer.length > 16000) {
+      this.buffer.splice(0, this.buffer.length - 16000);
+    }
+
+    for (let i = 0; i + FRAME <= pcm16.length; i += FRAME) {
+      let sum = 0;
+      for (let j = 0; j < FRAME; j++) sum += pcm16[i + j] * pcm16[i + j];
+      const rms = Math.sqrt(sum / FRAME);
+      if (rms >= RMS_THRESHOLD) {
+        this.speaking = true;
+        this.silenceFrames = 0;
+      } else if (this.speaking) {
+        this.silenceFrames++;
+        if (this.silenceFrames >= HANGOVER_FRAMES) {
+          void this.endUtterance();
+        }
+      }
+    }
+
+    if (this.speaking && this.buffer.length >= MAX_UTTERANCE_MS * 16) {
+      void this.endUtterance();
+    }
+  }
+
+  private async endUtterance(): Promise<void> {
+    if (!this.speaking) return;
+    this.speaking = false;
+    this.silenceFrames = 0;
+    const audio = new Int16Array(this.buffer);
+    this.buffer = [];
+    const typed = this.typedThisUtterance;
+    this.typedThisUtterance = "";
+    if (audio.length < 16000 * 0.25) return; // too short
+    void this.correct(audio, typed);
+  }
+
+  private async correct(audio: Int16Array, typed: string): Promise<void> {
+    if (this.whisperBusy) return;
+    this.whisperBusy = true;
+    const wavPath = writeWav(audio);
+    try {
+      const text = await transcribeWhisper(
+        this.settings.whisperBin,
+        this.settings.whisperModel,
+        wavPath,
+        this.settings.language,
+      );
+      this.cb.onUtterance(text);
+
+      if (this.voskDead) {
+        // basic mode: type the whisper result
+        await this.injector.type(text);
+        return;
+      }
+
+      const correction = planCorrection(typed.trim(), text.trim());
+      if (correction) {
+        await applyCorrection(
+          this.injector,
+          correction.backspaces,
+          correction.insert,
+        );
+      }
+    } catch {
+      this.cb.onError("whisper failed");
+    } finally {
+      this.whisperBusy = false;
+      try {
+        unlinkSync(wavPath);
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   async stop(): Promise<void> {
@@ -69,35 +159,12 @@ export class Session {
     this.cb.onState("working");
     await this.vosk?.stop();
     this.vosk = null;
-
-    const audio = new Int16Array(this.segmentAudio);
-    const segments = vadSegment(audio);
-    for (const seg of segments) {
-      const slice = audio.slice(seg.startSample, seg.endSample);
-      const wavPath = writeWav(slice);
-      try {
-        const text = await transcribeWhisper(
-          this.settings.whisperBin,
-          this.settings.whisperModel,
-          wavPath,
-          this.settings.language,
-        );
-        const correction = planCorrection(
-          this.typedForSegment.trim(),
-          text.trim(),
-        );
-        if (correction) {
-          const injector = createInjector();
-          await applyCorrection(
-            injector,
-            correction.backspaces,
-            correction.insert,
-          );
-        }
-        this.typedForSegment = "";
-      } catch {
-        /* whisper unavailable: keep vosk text */
-      }
+    if (this.speaking && this.buffer.length > 0) {
+      const audio = new Int16Array(this.buffer);
+      const typed = this.typedThisUtterance;
+      this.buffer = [];
+      this.typedThisUtterance = "";
+      await this.correct(audio, typed);
     }
     this.cb.onState("idle");
   }

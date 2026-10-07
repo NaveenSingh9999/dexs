@@ -10,12 +10,14 @@ if (!window.api) {
     sendPcm: () => {},
     onState: () => {},
     onPartial: () => {},
+    onUtterance: () => {},
+    onError: () => {},
     getSettings: async () => ({}),
     setSettings: () => {},
   };
 }
 
-if (location.search.includes("qa")) {
+if (location.search.includes("qa") || location.search.includes("dark")) {
   document.body.style.background = "#1c1c1e";
 }
 

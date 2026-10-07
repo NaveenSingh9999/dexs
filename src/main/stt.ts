@@ -16,6 +16,7 @@ export class VoskStream implements StreamingStt {
   private proc: ReturnType<typeof spawn> | null = null;
   private cb: ((c: SttChunk) => void) | null = null;
   private buf = "";
+  private errCb: (() => void) | null = null;
 
   constructor(
     private bin: string,
@@ -32,6 +33,9 @@ export class VoskStream implements StreamingStt {
         stdio: ["pipe", "pipe", "inherit"],
       },
     );
+    this.proc.on("error", () => {
+      this.errCb?.();
+    });
     this.proc.stdout!.on("data", (d: Buffer) => {
       this.buf += d.toString("utf8");
       let idx: number;
@@ -61,6 +65,10 @@ export class VoskStream implements StreamingStt {
 
   onChunk(cb: (c: SttChunk) => void): void {
     this.cb = cb;
+  }
+
+  onError(cb: () => void): void {
+    this.errCb = cb;
   }
 
   async stop(): Promise<string> {

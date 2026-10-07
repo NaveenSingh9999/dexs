@@ -5,6 +5,8 @@ export interface DexsApi {
   sendPcm(buf: ArrayBuffer): void;
   onState(cb: (s: string) => void): void;
   onPartial(cb: (t: string) => void): void;
+  onUtterance(cb: (t: string) => void): void;
+  onError(cb: (m: string) => void): void;
   getSettings(): Promise<unknown>;
   setSettings(s: unknown): void;
 }
