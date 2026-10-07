@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Dexs">
+  <title>Dexs</title>
+  <defs>
+    <linearGradient id="tile" x1="0.08" y1="0.02" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#545b64" />
+      <stop offset="0.45" stop-color="#3a4047" />
+      <stop offset="1" stop-color="#22262b" />
+    </linearGradient>
+    <linearGradient id="spec" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.18" />
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.04" />
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0" />
+    </linearGradient>
+    <radialGradient id="pearl" cx="0.36" cy="0.3" r="0.78">
+      <stop offset="0" stop-color="#ffffff" />
+      <stop offset="0.62" stop-color="#f4f7fa" />
+      <stop offset="1" stop-color="#dbe1e8" />
+    </radialGradient>
+    <radialGradient id="rim" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0.72" stop-color="#ffffff" stop-opacity="0" />
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.55" />
+    </radialGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.34" />
+      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0.12" />
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="sheen" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.45" />
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#tile)" />
+  <rect width="1024" height="1024" fill="url(#spec)" />
+  <rect x="1.5" y="1.5" width="1021" height="1021" fill="none" stroke="#ffffff" stroke-opacity="0.1" stroke-width="3" />
+  <circle cx="297" cy="512" r="308" fill="url(#glow)" />
+  <circle cx="297" cy="512" r="176" fill="url(#pearl)" />
+  <circle cx="297" cy="512" r="176" fill="url(#rim)" />
+  <circle cx="630" cy="512" r="105" fill="#ffffff" fill-opacity="0.62" />
+  <circle cx="598.5" cy="476.3" r="57.75000000000001" fill="url(#sheen)" />
+  <circle cx="853" cy="512" r="85" fill="#ffffff" fill-opacity="0.42" />
+  <circle cx="827.5" cy="483.1" r="46.75000000000001" fill="url(#sheen)" />
+
+</svg>

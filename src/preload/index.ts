@@ -20,6 +20,8 @@ const api = {
     ipcRenderer.on("dexs:utterance", (_e, t) => cb(t)),
   onError: (cb: (m: string) => void) =>
     ipcRenderer.on("dexs:error", (_e, m) => cb(m)),
+  onDone: (cb: (back: string) => void) =>
+    ipcRenderer.on("dexs:done", (_e, back) => cb(back)),
   getSettings: () => ipcRenderer.invoke("dexs:settings"),
   setSettings: (s: unknown) => ipcRenderer.send("dexs:settings:set", s),
 };

@@ -7,6 +7,7 @@ export interface DexsApi {
   onPartial(cb: (t: string) => void): void;
   onUtterance(cb: (t: string) => void): void;
   onError(cb: (m: string) => void): void;
+  onDone(cb: (back: string) => void): void;
   getSettings(): Promise<unknown>;
   setSettings(s: unknown): void;
 }

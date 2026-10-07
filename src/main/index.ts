@@ -11,7 +11,7 @@ import {
 import { join } from "path";
 import { electronApp } from "@electron-toolkit/utils";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
-import { Session } from "./session";
+import { Session, type DoneTarget } from "./session";
 import {
   defaultSettings,
   type DexsSettings,
@@ -22,6 +22,12 @@ let overlay: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let session: Session | null = null;
 let settings: DexsSettings = loadSettings();
+
+function appIcon(): Electron.NativeImage {
+  return nativeImage.createFromPath(
+    join(__dirname, "../../resources/icon.png"),
+  );
+}
 
 function settingsPath(): string {
   return join(app.getPath("userData"), "settings.json");
@@ -60,6 +66,7 @@ function createOverlay(): void {
     y: height - 96,
     frame: false,
     transparent: true,
+    icon: appIcon(),
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: false,
@@ -78,25 +85,51 @@ function createOverlay(): void {
   }
 }
 
+let generation = 0;
+
+/** Drops events from a session that a newer toggle has superseded, so a
+ *  draining old session can never overwrite the live one's pill state. */
+function live<T extends unknown[]>(
+  mine: number,
+  fn: (...args: T) => void,
+): (...args: T) => void {
+  return (...args: T) => {
+    if (mine === generation) fn(...args);
+  };
+}
+
 function toggle(): void {
-  if (!session || session.state === "idle") {
+  if (!session) {
+    const mine = ++generation;
     session = new Session(settings, {
-      onState: (s: SessionState) => overlay?.webContents.send("dexs:state", s),
-      onPartial: (t) => overlay?.webContents.send("dexs:partial", t),
-      onUtterance: (t) => overlay?.webContents.send("dexs:utterance", t),
-      onError: (m) => overlay?.webContents.send("dexs:error", m),
+      onState: live(mine, (s: SessionState) =>
+        overlay?.webContents.send("dexs:state", s),
+      ),
+      onPartial: live(mine, (t: string) =>
+        overlay?.webContents.send("dexs:partial", t),
+      ),
+      onUtterance: live(mine, (t: string) =>
+        overlay?.webContents.send("dexs:utterance", t),
+      ),
+      onError: live(mine, (m: string) =>
+        overlay?.webContents.send("dexs:error", m),
+      ),
+      onDone: live(mine, (b: DoneTarget) =>
+        overlay?.webContents.send("dexs:done", b),
+      ),
     });
     session.start();
   } else {
-    void session.stop();
+    const stopping = session;
+    session = null;
+    void stopping.stop();
   }
 }
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId("com.dexs.app");
   createOverlay();
-  const empty = nativeImage.createEmpty();
-  tray = new Tray(empty);
+  tray = new Tray(appIcon().resize({ width: 22, height: 22 }));
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: "Toggle dictation", click: toggle },

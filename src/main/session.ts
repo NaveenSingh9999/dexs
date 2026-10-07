@@ -7,11 +7,17 @@ import { tmpdir } from "os";
 import { join } from "path";
 import type { DexsSettings, SessionState } from "../core/types";
 
+export type DoneTarget = "listening" | "idle";
+
 export interface SessionCallbacks {
   onState(s: SessionState): void;
   onPartial(text: string): void;
   onUtterance(text: string): void;
   onError(msg: string): void;
+  /** Fired once a transcription+correction pass lands; the renderer shows a
+   *  brief finish flash, then returns to `back`. Never followed by onState,
+   *  so it is safe to fire-and-forget. */
+  onDone(back: DoneTarget): void;
 }
 
 const RMS_THRESHOLD = 500;
@@ -145,6 +151,7 @@ export class Session {
           /* keep */
         }
         await this.injector.type(finalText);
+        this.finish();
         return;
       }
 
@@ -166,6 +173,7 @@ export class Session {
           correction.insert,
         );
       }
+      this.finish();
     } catch {
       this.cb.onError("whisper failed");
     } finally {
@@ -175,6 +183,12 @@ export class Session {
         /* ignore */
       }
     }
+  }
+
+  /** A transcription+correction pass landed on a live session:
+   *  flash "done", then keep listening. */
+  private finish(): void {
+    if (this.running) this.cb.onDone("listening");
   }
 
   async stop(): Promise<void> {
@@ -191,7 +205,7 @@ export class Session {
       this.enqueue(audio, typed);
     }
     await this.queue;
-    this.cb.onState("idle");
+    this.cb.onDone("idle");
   }
 
   get state(): "idle" | "running" {

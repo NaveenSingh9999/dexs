@@ -12,6 +12,7 @@ if (!window.api) {
     onPartial: () => {},
     onUtterance: () => {},
     onError: () => {},
+    onDone: () => {},
     getSettings: async () => ({}),
     setSettings: () => {},
   };

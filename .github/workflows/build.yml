@@ -12,7 +12,7 @@ jobs:
         with: { node-version: 22, cache: npm }
       - run: npm ci
       - run: npm run typecheck
-      - run: npx vitest run src/core
+      - run: npx vitest run
   package:
     needs: typecheck-test
     strategy:
@@ -28,3 +28,8 @@ jobs:
       - run: npx electron-builder --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dexs-${{ matrix.os }}
+          path: dist/
+          if-no-files-found: error
