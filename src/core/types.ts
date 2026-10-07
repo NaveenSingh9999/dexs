@@ -9,6 +9,8 @@ export interface DexsSettings {
   voskModelDir: string;
   modelsDir: string;
   dockSide: "bottom" | "top" | "left" | "right" | "free";
+  llmBin: string;
+  llmModel: string;
 }
 
 export const defaultSettings: DexsSettings = {
@@ -20,4 +22,6 @@ export const defaultSettings: DexsSettings = {
   voskModelDir: "",
   modelsDir: "",
   dockSide: "bottom",
+  llmBin: "",
+  llmModel: "",
 };

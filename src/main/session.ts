@@ -1,6 +1,7 @@
 import { planCorrection } from "../core/differ";
 import { createInjector, applyCorrection, type Injector } from "./injector";
 import { VoskStream, transcribeWhisper } from "./stt";
+import { cleanText } from "./llm";
 import { mkdtempSync, writeFileSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -128,12 +129,20 @@ export class Session {
       this.cb.onUtterance(text);
 
       if (this.voskDead) {
-        // basic mode: type the whisper result
-        await this.injector.type(text);
+        // basic mode: type the whisper result, with llm cleanup if configured
+        let finalText = text;
+        try { finalText = await cleanText(this.settings.llmBin, this.settings.llmModel, text); } catch { /* keep */ }
+        await this.injector.type(finalText);
         return;
       }
 
-      const correction = planCorrection(typed.trim(), text.trim());
+      let finalText = text;
+      try {
+        finalText = await cleanText(this.settings.llmBin, this.settings.llmModel, text);
+      } catch {
+        /* llm unavailable, keep whisper text */
+      }
+      const correction = planCorrection(typed.trim(), finalText.trim());
       if (correction) {
         await applyCorrection(
           this.injector,
