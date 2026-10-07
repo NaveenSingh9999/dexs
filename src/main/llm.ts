@@ -10,9 +10,22 @@ export function cleanText(
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     if (!llmBin) return resolve(text);
-    const p = spawn(llmBin, ["-m", llmModel, "--temp", "0", "-n", "256", "-p", `${PROMPT}\n\n${text}`], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const p = spawn(
+      llmBin,
+      [
+        "-m",
+        llmModel,
+        "--temp",
+        "0",
+        "-n",
+        "256",
+        "-p",
+        `${PROMPT}\n\n${text}`,
+      ],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     let out = "";
     let err = "";
     const to = setTimeout(() => {

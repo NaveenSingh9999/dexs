@@ -27,7 +27,7 @@ export class Session {
   private speaking = false;
   private silenceFrames = 0;
   private running = false;
-  private whisperBusy = false;
+  private queue: Promise<void> = Promise.resolve();
   private voskDead = false;
 
   constructor(
@@ -112,12 +112,16 @@ export class Session {
     const typed = this.typedThisUtterance;
     this.typedThisUtterance = "";
     if (audio.length < 16000 * 0.25) return; // too short
-    void this.correct(audio, typed);
+    this.enqueue(audio, typed);
+  }
+
+  private enqueue(audio: Int16Array, typed: string): void {
+    this.queue = this.queue.then(() =>
+      this.correct(audio, typed).catch(() => this.cb.onError("failed")),
+    );
   }
 
   private async correct(audio: Int16Array, typed: string): Promise<void> {
-    if (this.whisperBusy) return;
-    this.whisperBusy = true;
     const wavPath = writeWav(audio);
     try {
       const text = await transcribeWhisper(
@@ -131,14 +135,26 @@ export class Session {
       if (this.voskDead) {
         // basic mode: type the whisper result, with llm cleanup if configured
         let finalText = text;
-        try { finalText = await cleanText(this.settings.llmBin, this.settings.llmModel, text); } catch { /* keep */ }
+        try {
+          finalText = await cleanText(
+            this.settings.llmBin,
+            this.settings.llmModel,
+            text,
+          );
+        } catch {
+          /* keep */
+        }
         await this.injector.type(finalText);
         return;
       }
 
       let finalText = text;
       try {
-        finalText = await cleanText(this.settings.llmBin, this.settings.llmModel, text);
+        finalText = await cleanText(
+          this.settings.llmBin,
+          this.settings.llmModel,
+          text,
+        );
       } catch {
         /* llm unavailable, keep whisper text */
       }
@@ -153,7 +169,6 @@ export class Session {
     } catch {
       this.cb.onError("whisper failed");
     } finally {
-      this.whisperBusy = false;
       try {
         unlinkSync(wavPath);
       } catch {
@@ -173,8 +188,9 @@ export class Session {
       const typed = this.typedThisUtterance;
       this.buffer = [];
       this.typedThisUtterance = "";
-      await this.correct(audio, typed);
+      this.enqueue(audio, typed);
     }
+    await this.queue;
     this.cb.onState("idle");
   }
 

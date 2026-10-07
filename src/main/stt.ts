@@ -89,8 +89,13 @@ export function transcribeWhisper(
   modelPath: string,
   wavPath: string,
   lang: string,
+  timeoutMs = 30000,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
+    const to = setTimeout(() => {
+      p.kill();
+      reject(new Error("whisper timeout"));
+    }, timeoutMs);
     const args = [
       "-m",
       modelPath,
@@ -104,11 +109,14 @@ export function transcribeWhisper(
     const p = spawn(whisperBin, args, { stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
     p.stdout.on("data", (d) => (out += d.toString()));
-    p.on("close", (code) =>
-      code === 0
-        ? resolve(out.trim())
-        : reject(new Error(`whisper exit ${code}`)),
-    );
-    p.on("error", reject);
+    p.on("close", (code) => {
+      clearTimeout(to);
+      if (code === 0) resolve(out.trim());
+      else reject(new Error(`whisper exit ${code}`));
+    });
+    p.on("error", (e) => {
+      clearTimeout(to);
+      reject(e);
+    });
   });
 }
