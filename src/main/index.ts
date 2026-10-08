@@ -60,10 +60,10 @@ function createOverlay(): void {
   const display = screen.getPrimaryDisplay();
   const { width, height } = display.workAreaSize;
   overlay = new BrowserWindow({
-    width: 360,
-    height: 72,
-    x: Math.round((width - 360) / 2),
-    y: height - 96,
+    width: 132,
+    height: 40,
+    x: Math.round((width - 132) / 2),
+    y: height - 40,
     frame: false,
     transparent: true,
     icon: appIcon(),
@@ -78,6 +78,67 @@ function createOverlay(): void {
     },
   });
   overlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  let moveDebounce: ReturnType<typeof setTimeout> | undefined;
+  let lastSlot = "h-center v-bottom";
+  overlay.on("move", () => {
+    if (moveDebounce) clearTimeout(moveDebounce);
+    moveDebounce = setTimeout(() => {
+      if (!overlay) return;
+      const b = overlay.getBounds();
+      const display = screen.getDisplayNearestPoint({
+        x: Math.round(b.x + b.width / 2),
+        y: Math.round(b.y + b.height / 2),
+      });
+      const wa = display.workArea;
+      const cx = b.x + b.width / 2;
+      const cy = b.y + b.height / 2;
+      const h =
+        cx < wa.x + wa.width / 3
+          ? "h-left"
+          : cx > wa.x + (2 * wa.width) / 3
+            ? "h-right"
+            : "h-center";
+      const v =
+        cy < wa.y + wa.height / 3
+          ? "v-top"
+          : cy > wa.y + (2 * wa.height) / 3
+            ? "v-bottom"
+            : "v-middle";
+      const key = `${h} ${v}`;
+      if (key !== lastSlot) {
+        lastSlot = key;
+        overlay.webContents.send("dexs:anchor", { h, v });
+      }
+      const wx =
+        h === "h-left"
+          ? wa.x
+          : h === "h-right"
+            ? wa.x + wa.width - 132
+            : Math.round(wa.x + (wa.width - 132) / 2);
+      const wy =
+        v === "v-top"
+          ? wa.y
+          : v === "v-bottom"
+            ? wa.y + wa.height - 40
+            : Math.round(wa.y + (wa.height - 40) / 2);
+      const steps = 12;
+      for (let i = 1; i <= steps; i++) {
+        const step = i;
+        setTimeout(() => {
+          if (!overlay) return;
+          const t = step / steps;
+          const eased = 1 - Math.pow(1 - t, 3);
+          overlay.setPosition(
+            Math.round(b.x + (wx - b.x) * eased),
+            Math.round(b.y + (wy - b.y) * eased),
+          );
+        }, (step * 200) / steps);
+      }
+    }, 240);
+  });
+  overlay.webContents.once("did-finish-load", () => {
+    overlay?.webContents.send("dexs:anchor", { h: "h-center", v: "v-bottom" });
+  });
   if (process.env["ELECTRON_RENDERER_URL"]) {
     overlay.loadURL(process.env["ELECTRON_RENDERER_URL"]);
   } else {

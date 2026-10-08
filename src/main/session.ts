@@ -1,6 +1,6 @@
 import { planCorrection } from "../core/differ";
 import { createInjector, applyCorrection, type Injector } from "./injector";
-import { VoskStream, transcribeWhisper } from "./stt";
+import { SherpaStream, transcribeWhisper } from "./stt";
 import { cleanText } from "./llm";
 import { mkdtempSync, writeFileSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -26,7 +26,7 @@ const MAX_UTTERANCE_MS = 15000;
 const FRAME = 480; // 30ms @ 16kHz
 
 export class Session {
-  private vosk: VoskStream | null = null;
+  private sherpa: SherpaStream | null = null;
   private injector: Injector = createInjector();
   private typedThisUtterance = "";
   private buffer: number[] = [];
@@ -34,7 +34,7 @@ export class Session {
   private silenceFrames = 0;
   private running = false;
   private queue: Promise<void> = Promise.resolve();
-  private voskDead = false;
+  private sherpaDead = false;
 
   constructor(
     private settings: DexsSettings,
@@ -48,15 +48,11 @@ export class Session {
     this.silenceFrames = 0;
     this.buffer = [];
     this.typedThisUtterance = "";
-    this.voskDead = false;
+    this.sherpaDead = false;
     this.cb.onState("listening");
     try {
-      this.vosk = new VoskStream(
-        this.settings.voskBin,
-        this.settings.voskModelDir,
-        this.settings.language,
-      );
-      this.vosk.onChunk((c) => {
+      this.sherpa = new SherpaStream(this.settings);
+      this.sherpa.onChunk((c) => {
         if (!c.final) {
           this.cb.onPartial(c.text);
           return;
@@ -68,22 +64,22 @@ export class Session {
           })
           .catch(() => this.cb.onError("type failed"));
       });
-      this.vosk.start();
-      this.vosk.onError(() => {
-        this.voskDead = true;
-        this.vosk = null;
-        this.cb.onError("Vosk unavailable, using basic mode");
+      this.sherpa.start();
+      this.sherpa.onError(() => {
+        this.sherpaDead = true;
+        this.sherpa = null;
+        this.cb.onError("Streaming recognizer unavailable, using basic mode");
       });
     } catch {
-      this.vosk = null;
-      this.voskDead = true;
-      this.cb.onError("Vosk unavailable, using basic mode");
+      this.sherpa = null;
+      this.sherpaDead = true;
+      this.cb.onError("Streaming recognizer unavailable, using basic mode");
     }
   }
 
   feed(pcm16: Int16Array): void {
     if (!this.running) return;
-    this.vosk?.feed(pcm16);
+    this.sherpa?.feed(pcm16);
     this.buffer.push(...pcm16);
     if (!this.speaking && this.buffer.length > 16000) {
       this.buffer.splice(0, this.buffer.length - 16000);
@@ -131,14 +127,13 @@ export class Session {
     const wavPath = writeWav(audio);
     try {
       const text = await transcribeWhisper(
-        this.settings.whisperBin,
-        this.settings.whisperModel,
+        this.settings,
         wavPath,
         this.settings.language,
       );
       this.cb.onUtterance(text);
 
-      if (this.voskDead) {
+      if (this.sherpaDead) {
         // basic mode: type the whisper result, with llm cleanup if configured
         let finalText = text;
         try {
@@ -191,12 +186,12 @@ export class Session {
     if (this.running) this.cb.onDone("listening");
   }
 
-  async stop(): Promise<void> {
+  async stop(opts?: { silent?: boolean }): Promise<void> {
     if (!this.running) return;
     this.running = false;
-    this.cb.onState("working");
-    await this.vosk?.stop();
-    this.vosk = null;
+    if (!opts?.silent) this.cb.onState("working");
+    await this.sherpa?.stop();
+    this.sherpa = null;
     if (this.speaking && this.buffer.length > 0) {
       const audio = new Int16Array(this.buffer);
       const typed = this.typedThisUtterance;
@@ -205,7 +200,7 @@ export class Session {
       this.enqueue(audio, typed);
     }
     await this.queue;
-    this.cb.onDone("idle");
+    if (!opts?.silent) this.cb.onDone("idle");
   }
 
   get state(): "idle" | "running" {

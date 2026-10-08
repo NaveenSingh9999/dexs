@@ -13,6 +13,8 @@ if (!window.api) {
     onUtterance: () => {},
     onError: () => {},
     onDone: () => {},
+    onAnchor: () => {},
+    abort: () => {},
     getSettings: async () => ({}),
     setSettings: () => {},
   };

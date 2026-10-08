@@ -22,6 +22,9 @@ const api = {
     ipcRenderer.on("dexs:error", (_e, m) => cb(m)),
   onDone: (cb: (back: string) => void) =>
     ipcRenderer.on("dexs:done", (_e, back) => cb(back)),
+  onAnchor: (cb: (slot: { h: string; v: string }) => void) =>
+    ipcRenderer.on("dexs:anchor", (_e, slot) => cb(slot)),
+  abort: () => ipcRenderer.send("dexs:abort"),
   getSettings: () => ipcRenderer.invoke("dexs:settings"),
   setSettings: (s: unknown) => ipcRenderer.send("dexs:settings:set", s),
 };

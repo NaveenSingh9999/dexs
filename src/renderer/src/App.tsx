@@ -7,7 +7,7 @@ import {
   MagicWand,
   CheckCircle,
 } from "@phosphor-icons/react";
-import { barHeight, WAVE_REST_AMP } from "./wave";
+import { barHeight } from "./wave";
 
 type State = "idle" | "listening" | "working" | "done" | "error";
 type DoneBack = "listening" | "idle";
@@ -38,6 +38,11 @@ export default function App(): JSX.Element {
           : "idle",
   );
   const [doneBack, setDoneBack] = useState<DoneBack>("idle");
+  const stateRef = useRef<State>("idle");
+  const [slot, setSlot] = useState<{
+    h: "h-left" | "h-center" | "h-right";
+    v: "v-top" | "v-middle" | "v-bottom";
+  }>({ h: "h-center", v: "v-bottom" });
   const [hover, setHover] = useState(false);
   const streamRef = useRef<MediaStream | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
@@ -45,6 +50,7 @@ export default function App(): JSX.Element {
   const levelRef = useRef(0);
   const ampRef = useRef(0);
   const barsRef = useRef<(HTMLSpanElement | null)[]>([]);
+  const springRef = useRef<{ h: number[]; v: number[] }>({ h: [], v: [] });
 
   async function startCapture(): Promise<void> {
     try {
@@ -69,6 +75,7 @@ export default function App(): JSX.Element {
       proc.connect(ctx.destination);
     } catch {
       setState("error");
+      window.api.abort();
     }
   }
 
@@ -83,11 +90,24 @@ export default function App(): JSX.Element {
   }
 
   useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  useEffect(() => {
     window.api.onState((s: string) => setState(s as State));
     window.api.onDone((back: string) => {
+      if (stateRef.current === "error" || stateRef.current === "idle") return;
       setDoneBack(back === "listening" ? "listening" : "idle");
       setState("done");
     });
+    window.api.onAnchor((s) =>
+      setSlot(
+        s as {
+          h: "h-left" | "h-center" | "h-right";
+          v: "v-top" | "v-middle" | "v-bottom";
+        },
+      ),
+    );
   }, []);
 
   const capturing =
@@ -111,14 +131,35 @@ export default function App(): JSX.Element {
     return () => window.clearTimeout(t);
   }, [state, doneBack, frozen]);
 
+  // Error collapses quickly; working gets a longer grace since its queue
+  // (last utterance + whisper) can take a few seconds.
+  useEffect(() => {
+    if (state !== "error" && state !== "working") return;
+    const t = window.setTimeout(
+      () => setState("idle"),
+      state === "error" ? 2000 : 8000,
+    );
+    return () => window.clearTimeout(t);
+  }, [state]);
+
   useEffect(() => {
     let raf = 0;
     const tick = (): void => {
-      ampRef.current += (levelRef.current - ampRef.current) * 0.22;
-      const amp = Math.max(ampRef.current, WAVE_REST_AMP);
+      ampRef.current += (levelRef.current - ampRef.current) * 0.25;
+      const amp = ampRef.current;
       const t = performance.now() / 1000;
       barsRef.current.forEach((el, i) => {
-        if (el) el.style.height = `${barHeight(amp, i, t)}px`;
+        if (!el) return;
+        const target = barHeight(amp, i, t);
+        const s = springRef.current;
+        if (s.h[i] == null) {
+          s.h[i] = target;
+          s.v[i] = 0;
+        }
+        s.v[i] += (target - s.h[i]) * 0.28;
+        s.v[i] *= 0.72;
+        s.h[i] += s.v[i];
+        el.style.height = `${Math.max(4, s.h[i]).toFixed(1)}px`;
       });
       raf = requestAnimationFrame(tick);
     };
@@ -128,82 +169,87 @@ export default function App(): JSX.Element {
 
   return (
     <>
-      {/* Bottom STT pill */}
-      <motion.div
-        animate={{
-          width: pillWidth(state, hover),
-          height: state === "idle" && !hover ? 12 : 40,
-        }}
-        transition={smooth}
-        style={{ left: "50%", x: "-50%", bottom: 8 }}
-        className={`pill ${state}`}
-        onMouseEnter={() => setHover(true)}
-        onMouseLeave={() => setHover(false)}
-      >
-        <style>{css}</style>
-        {state === "idle" && !hover && (
-          <motion.span
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="mini-handle"
-          />
-        )}
-        {state === "idle" && hover && (
-          <motion.div
-            initial={{ opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="row"
-          >
-            <TrayButton label="Transcript" onClick={() => window.api.toggle()}>
-              <Microphone size={17} weight="duotone" />
-            </TrayButton>
-            <TrayButton label="Settings" onClick={() => {}}>
-              <GearSix size={17} weight="duotone" />
-            </TrayButton>
-          </motion.div>
-        )}
-        {state === "listening" && (
-          <div className="row wave">
-            {Array.from({ length: 7 }).map((_, i) => (
-              <span
-                key={i}
-                ref={(el) => {
-                  barsRef.current[i] = el;
-                }}
-                style={{ height: 4 }}
-              />
-            ))}
-          </div>
-        )}
-        {state === "working" && (
-          <div className="row">
+      <div className={`container ${slot.h} ${slot.v}`}>
+        {/* Bottom STT pill */}
+        <motion.div
+          animate={{
+            width: pillWidth(state, hover),
+            height: state === "idle" && !hover ? 12 : 40,
+          }}
+          transition={smooth}
+          className={`pill ${state}`}
+          onMouseEnter={() => setHover(true)}
+          onMouseLeave={() => setHover(false)}
+        >
+          <style>{css}</style>
+          {state === "idle" && !hover && (
             <motion.span
-              animate={{ opacity: [0.5, 1, 0.5] }}
-              transition={{ repeat: Infinity, duration: 1.2 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="mini-handle"
+            />
+          )}
+          {state === "idle" && hover && (
+            <motion.div
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="row"
             >
-              <MagicWand size={17} weight="duotone" />
-            </motion.span>
-          </div>
-        )}
-        {state === "done" && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.85 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={smooth}
-            className="row"
-          >
-            <span className="done-check">
-              <CheckCircle size={18} weight="duotone" />
-            </span>
-          </motion.div>
-        )}
-        {state === "error" && (
-          <div className="row">
-            <WaveformSlash size={17} />
-            <span className="err">Mic unavailable</span>
-          </div>
-        )}
-      </motion.div>
+              <TrayButton
+                label="Transcribe"
+                onClick={() => window.api.toggle()}
+              >
+                <Microphone size={17} weight="duotone" />
+              </TrayButton>
+              <TrayButton label="Settings" onClick={() => {}}>
+                <GearSix size={17} weight="duotone" />
+              </TrayButton>
+            </motion.div>
+          )}
+          {state === "listening" && (
+            <div className="row wave">
+              {Array.from({ length: 7 }).map((_, i) => (
+                <span
+                  key={i}
+                  ref={(el) => {
+                    barsRef.current[i] = el;
+                  }}
+                  style={{ height: 4 }}
+                />
+              ))}
+            </div>
+          )}
+          {state === "working" && (
+            <div className="row">
+              <motion.span
+                animate={{ opacity: [0.5, 1, 0.5] }}
+                transition={{ repeat: Infinity, duration: 1.2 }}
+              >
+                <MagicWand size={17} weight="duotone" />
+              </motion.span>
+            </div>
+          )}
+          {state === "done" && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.85 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={smooth}
+              className="row"
+            >
+              <span className="done-check">
+                <CheckCircle size={18} weight="duotone" />
+              </span>
+            </motion.div>
+          )}
+          {state === "error" && (
+            <div className="row">
+              <WaveformSlash size={17} />
+              <span className="err">Mic unavailable</span>
+            </div>
+          )}
+        </motion.div>
+      </div>
+      <style>{css}</style>
     </>
   );
 }
@@ -233,10 +279,17 @@ function TrayButton({
 }
 
 const css = `
+.container { position: fixed; inset: 0; display: flex; flex-direction: column; pointer-events: none; }
+.container.h-left { align-items: flex-start; }
+.container.h-center { align-items: center; }
+.container.h-right { align-items: flex-end; }
+.container.v-top { justify-content: flex-start; }
+.container.v-middle { justify-content: center; }
+.container.v-bottom { justify-content: flex-end; }
 .pill {
-  position: fixed;
   padding: 0; overflow: hidden;
   display: flex; align-items: center; justify-content: center;
+  pointer-events: auto;
   border-radius: 28px;
   background: rgba(28,28,30,0.55);
   backdrop-filter: blur(20px) saturate(140%);
@@ -245,22 +298,24 @@ const css = `
   box-shadow: 0 4px 18px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.12);
   color: #fff; cursor: grab; user-select: none;
   transform: translateZ(0);
+  -webkit-app-region: drag;
 }
 .mini-handle { width: 22px; height: 4px; border-radius: 999px; background: rgba(255,255,255,0.16); }
 .row { display: flex; align-items: center; gap: 8px; }
 .err { font-size: 11px; opacity: 0.8; }
 .wave { height: 24px; align-items: center; gap: 3px; }
-.wave span { width: 3px; border-radius: 2px; background: linear-gradient(180deg,#FF9A8B,#FF4634); box-shadow: 0 0 6px rgba(255,74,56,0.55); display: inline-block; }
+.wave span { width: 3px; border-radius: 2px; background: linear-gradient(180deg,#FF9A8B,#FF4634); display: inline-block; }
 .pill.listening {
-  background: rgba(52,20,18,0.58);
-  border-color: rgba(255,110,95,0.45);
-  box-shadow: 0 6px 26px rgba(255,64,48,0.30), 0 0 0 1px rgba(255,90,77,0.18), inset 0 1px 0 rgba(255,255,255,0.14);
+  background: rgba(28,16,15,0.55);
+  border-color: rgba(255,110,95,0.28);
+  box-shadow: 0 4px 18px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.10);
 }
 .pill.done {
-  border-color: rgba(255,255,255,0.32);
-  box-shadow: 0 4px 18px rgba(0,0,0,0.28), 0 0 14px rgba(255,255,255,0.18), inset 0 1px 0 rgba(255,255,255,0.16);
+  border-color: rgba(255,255,255,0.28);
+  box-shadow: 0 4px 18px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.12);
 }
-.done-check { color: #fff; filter: drop-shadow(0 0 6px rgba(255,255,255,0.35)); display: flex; }
+.pill.error { border-color: rgba(255,110,95,0.28); }
+.done-check { color: #fff; display: flex; }
 .tray-btn {
   display: flex; align-items: center; justify-content: center;
   width: 30px; height: 30px; border-radius: 50%;

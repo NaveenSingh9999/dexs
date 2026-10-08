@@ -1,6 +1,3 @@
-/** Amplitude floor that keeps a gentle idle ripple while listening. */
-export const WAVE_REST_AMP = 0.3;
-
 const MIN_BAR = 4;
 
 /** The travelling wave repeats every 2π/3.2 seconds; folding time into one
