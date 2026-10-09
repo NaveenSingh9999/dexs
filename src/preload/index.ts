@@ -25,6 +25,11 @@ const api = {
   onAnchor: (cb: (slot: { h: string; v: string }) => void) =>
     ipcRenderer.on("dexs:anchor", (_e, slot) => cb(slot)),
   abort: () => ipcRenderer.send("dexs:abort"),
+  log: (m: string) => ipcRenderer.send("dexs:log", m),
+  dragBy: (dx: number, dy: number) => ipcRenderer.send("dexs:drag", dx, dy),
+  resize: (w: number, h: number) => ipcRenderer.send("dexs:resize", w, h),
+  dragStart: () => ipcRenderer.send("dexs:drag:start"),
+  dragEnd: () => ipcRenderer.send("dexs:drag:end"),
   getSettings: () => ipcRenderer.invoke("dexs:settings"),
   setSettings: (s: unknown) => ipcRenderer.send("dexs:settings:set", s),
 };

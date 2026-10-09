@@ -57,12 +57,8 @@ export class Session {
           this.cb.onPartial(c.text);
           return;
         }
-        this.injector
-          .type(c.text)
-          .then(() => {
-            this.typedThisUtterance += c.text;
-          })
-          .catch(() => this.cb.onError("type failed"));
+        console.log(`[dexs] streaming final: ${JSON.stringify(c.text)}`);
+        this.enqueueType(c.text);
       });
       this.sherpa.start();
       this.sherpa.onError(() => {
@@ -70,7 +66,8 @@ export class Session {
         this.sherpa = null;
         this.cb.onError("Streaming recognizer unavailable, using basic mode");
       });
-    } catch {
+    } catch (e) {
+      console.error("[dexs] streaming recogniser init failed:", e);
       this.sherpa = null;
       this.sherpaDead = true;
       this.cb.onError("Streaming recognizer unavailable, using basic mode");
@@ -111,19 +108,35 @@ export class Session {
     this.silenceFrames = 0;
     const audio = new Int16Array(this.buffer);
     this.buffer = [];
+    if (audio.length < 16000 * 0.25) return; // too short
+    // Flush the pending partial so its text types now, then queue the review
+    // pass behind it on the same serial chain.
+    this.sherpa?.flush();
+    this.enqueue(audio);
+  }
+
+  /** Type streamed text on the same serial chain as the corrections, so an
+   *  utterance's text is always in place before its correction runs. */
+  private enqueueType(text: string): void {
+    this.queue = this.queue
+      .then(() => this.injector.type(text))
+      .then(() => {
+        this.typedThisUtterance += text;
+      })
+      .catch(() => this.cb.onError("type failed"));
+  }
+
+  private enqueue(audio: Int16Array): void {
+    this.queue = this.queue
+      .then(() => this.correct(audio))
+      .catch(() => this.cb.onError("failed"));
+  }
+
+  private async correct(audio: Int16Array): Promise<void> {
+    // Runs on the serial chain, after this utterance's streamed text has been
+    // typed: the accumulated text is exactly what sits in the target now.
     const typed = this.typedThisUtterance;
     this.typedThisUtterance = "";
-    if (audio.length < 16000 * 0.25) return; // too short
-    this.enqueue(audio, typed);
-  }
-
-  private enqueue(audio: Int16Array, typed: string): void {
-    this.queue = this.queue.then(() =>
-      this.correct(audio, typed).catch(() => this.cb.onError("failed")),
-    );
-  }
-
-  private async correct(audio: Int16Array, typed: string): Promise<void> {
     const wavPath = writeWav(audio);
     try {
       const text = await transcribeWhisper(
@@ -191,14 +204,13 @@ export class Session {
     this.running = false;
     if (!opts?.silent) this.cb.onState("working");
     await this.sherpa?.stop();
-    this.sherpa = null;
     if (this.speaking && this.buffer.length > 0) {
       const audio = new Int16Array(this.buffer);
-      const typed = this.typedThisUtterance;
       this.buffer = [];
-      this.typedThisUtterance = "";
-      this.enqueue(audio, typed);
+      this.sherpa?.flush();
+      this.enqueue(audio);
     }
+    this.sherpa = null;
     await this.queue;
     if (!opts?.silent) this.cb.onDone("idle");
   }

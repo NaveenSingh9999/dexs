@@ -18,6 +18,13 @@ export default defineConfig(
     }
   },
   {
+    // build-tool glue loaded by node directly: plain JS, no type syntax
+    files: ['scripts/**/*.mjs'],
+    rules: {
+      '@typescript-eslint/explicit-function-return-type': 'off',
+    },
+  },
+  {
     files: ['**/*.{ts,tsx}'],
     plugins: {
       'react-hooks': eslintPluginReactHooks,

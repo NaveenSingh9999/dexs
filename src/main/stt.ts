@@ -12,6 +12,11 @@ export interface StreamingStt {
   feed(pcm16: Int16Array): void;
   onChunk(cb: (c: SttChunk) => void): void;
   onError(cb: () => void): void;
+  /** Emit whatever the recogniser has decoded so far as a final chunk and
+   *  reset its stream. The session calls this when *its* VAD ends an
+   *  utterance, because that happens sooner than the model's own endpoint
+   *  rules and would otherwise never surface the partial text. */
+  flush(): void;
   stop(): Promise<string>;
 }
 
@@ -35,7 +40,12 @@ function modelsRoot(settings: DexsSettings): string {
 interface SherpaModule {
   OnlineRecognizer: new (config: unknown) => OnlineRecognizer;
   OfflineRecognizer: new (config: unknown) => OfflineRecognizer;
-  readWave: (p: string) => { samples: Float32Array; sampleRate: number };
+  readWave: (
+    p: string,
+    // false => copy into a normal ArrayBuffer. Electron's Node rejects the
+    // external buffer the addon uses by default.
+    external?: boolean,
+  ) => { samples: Float32Array; sampleRate: number };
 }
 
 interface OnlineRecognizer {
@@ -135,6 +145,20 @@ export class SherpaStream implements StreamingStt {
     }
   }
 
+  flush(): void {
+    const rec = this.recognizer;
+    const st = this.stream;
+    if (!rec || !st) return;
+    try {
+      while (rec.isReady(st)) rec.decode(st);
+      const text = (rec.getResult(st)?.text ?? "").trim();
+      if (text) this.cb?.({ text, final: true });
+      rec.reset(st);
+    } catch (e) {
+      console.error("streaming flush failed:", e);
+    }
+  }
+
   onChunk(cb: (c: SttChunk) => void): void {
     this.cb = cb;
   }
@@ -188,7 +212,7 @@ export async function transcribeWhisper(
     },
   });
   const stream = recognizer.createStream();
-  const wave = sherpa.readWave(wavPath);
+  const wave = sherpa.readWave(wavPath, false);
   stream.acceptWaveform({
     samples: wave.samples,
     sampleRate: wave.sampleRate,

@@ -10,6 +10,11 @@ export interface DexsApi {
   onDone(cb: (back: string) => void): void;
   onAnchor(cb: (slot: { h: string; v: string }) => void): void;
   abort(): void;
+  log(m: string): void;
+  dragBy(dx: number, dy: number): void;
+  resize(w: number, h: number): void;
+  dragStart(): void;
+  dragEnd(): void;
   getSettings(): Promise<unknown>;
   setSettings(s: unknown): void;
 }

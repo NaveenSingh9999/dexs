@@ -30,24 +30,53 @@ function x11Injector(): Injector {
       await run("xdotool", ["type", "--delay", "8", "--", text]);
     },
     async backspace(count) {
-      for (let i = 0; i < count; i++)
+      for (let i = 0; i < count; i++) {
         await run("xdotool", ["key", "BackSpace"]);
+      }
     },
     async paste(text) {
-      await run("xclip", ["-selection", "clipboard"], {
-        input: text,
-      } as never).catch(async () => {
-        const { execFile: exec } = await import("child_process");
+      // xclip/xsel may not be installed; if either is missing or fails, type
+      // the text instead of losing it.
+      const tool = await findClipboardTool();
+      if (!tool) {
+        if (text) await run("xdotool", ["type", "--delay", "4", "--", text]);
+        return;
+      }
+      const put = async (bin: string): Promise<void> => {
         await new Promise<void>((resolve, reject) => {
-          const p = exec("xclip", ["-selection", "clipboard"], (e) =>
+          const p = execFile(bin, ["-selection", "clipboard"], (e) =>
             e ? reject(e) : resolve(),
           );
           p.stdin!.end(text);
         });
-      });
+      };
+      try {
+        await put(tool);
+      } catch {
+        if (text) await run("xdotool", ["type", "--delay", "4", "--", text]);
+        return;
+      }
       await run("xdotool", ["key", "ctrl+v"]);
     },
   };
+}
+
+let clipboardTool: string | null | undefined;
+
+/** Which clipboard CLI exists, if any. Cached: tools do not appear mid-session. */
+async function findClipboardTool(): Promise<string | null> {
+  if (clipboardTool !== undefined) return clipboardTool;
+  for (const bin of ["xclip", "xsel"]) {
+    try {
+      await run("which", [bin]);
+      clipboardTool = bin;
+      return bin;
+    } catch {
+      /* try the next one */
+    }
+  }
+  clipboardTool = null;
+  return clipboardTool;
 }
 
 function windowsInjector(): Injector {

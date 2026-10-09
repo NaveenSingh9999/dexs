@@ -15,6 +15,11 @@ if (!window.api) {
     onDone: () => {},
     onAnchor: () => {},
     abort: () => {},
+    log: () => {},
+    dragBy: () => {},
+    resize: () => {},
+    dragStart: () => {},
+    dragEnd: () => {},
     getSettings: async () => ({}),
     setSettings: () => {},
   };
