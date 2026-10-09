@@ -1,55 +1,40 @@
 name: build
-
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    tags: ['v*']
   pull_request:
-
 jobs:
   typecheck-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
+        with: { node-version: 22, cache: npm }
       - run: npm ci
       - run: npm run typecheck
       - run: npx vitest run
-
   package:
     needs: typecheck-test
     strategy:
       matrix:
-        include:
-          - os: ubuntu-latest
-            target: AppImage deb
-          - os: ubuntu-24.04-arm
-            target: AppImage deb
-          - os: windows-latest
-            target: nsis
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
+        with: { node-version: 22, cache: npm }
       # The afterPack hook fetches the speech models while packaging, so the
-      # installers ship with everything dictation needs and there is no first
-      # run download. patchelf is only needed for the Linux RPATH patch.
+      # installers ship with everything dictation needs. patchelf is only for
+      # the Linux RPATH patch on the sherpa native addon.
       - name: Install patchelf
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y patchelf
       - run: npm ci
       - run: npx electron-vite build
-      - run: npx electron-builder --publish never --${{ matrix.target }}
+      - run: npx electron-builder --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-      - name: Show what got packaged
-        run: ls -lh dist/ || true
       - uses: actions/upload-artifact@v4
         with:
           name: dexs-${{ matrix.os }}
@@ -58,9 +43,8 @@ jobs:
             dist/*.AppImage
             dist/*.deb
           if-no-files-found: warn
-
   release:
-    if: startsWith(github.ref, "refs/tags/v")
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: package
     runs-on: ubuntu-latest
     permissions:
@@ -71,8 +55,7 @@ jobs:
           pattern: dexs-*
           path: artifacts
           merge-multiple: true
-      - name: Publish
-        run: gh release create "$GITHUB_REF_NAME" artifacts/*
+      - run: gh release create "$GITHUB_REF_NAME" artifacts/*
           --repo "$GITHUB_REPOSITORY"
           --title "Dexs $GITHUB_REF_NAME"
           --generate-notes
