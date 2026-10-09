@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  session as electronSession,
   globalShortcut,
   ipcMain,
   screen,
@@ -252,6 +253,20 @@ app.whenReady().then(() => {
     settings = s;
     saveSettings();
   });
+  // Windows can hand the renderer a denied or prompt-less permission state;
+  // grant media explicitly for our own overlay so input detection is not the
+  // thing that fails.
+  electronSession.defaultSession.setPermissionRequestHandler(
+    (_wc, permission, done) => {
+      done(permission === "media");
+    },
+  );
+  electronSession.defaultSession.setPermissionCheckHandler(
+    (_wc, permission) => {
+      return permission === "media";
+    },
+  );
+
   ipcMain.on("dexs:toggle", toggle);
   // Renderer diagnostics (console output is not forwarded to the terminal).
   ipcMain.on("dexs:log", (_e, m: string) => console.log(`[renderer] ${m}`));

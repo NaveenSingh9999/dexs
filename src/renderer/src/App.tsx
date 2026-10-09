@@ -11,6 +11,14 @@ import {
 } from "@phosphor-icons/react";
 import { barHeight } from "./wave";
 import {
+  candidateConstraints,
+  captureErrorText,
+  classifyCaptureError,
+  probeSignal,
+  rankDevices,
+  type AudioDeviceInfo,
+} from "./audioInput";
+import {
   BLOCK_MS,
   SAMPLE_RATE,
   blockLevel,
@@ -59,6 +67,7 @@ export default function App(): JSX.Element {
   const stateRef = useRef<State>("idle");
   const [source, setSource] = useState<Source>("mic");
   const [dockArmed, setDockArmed] = useState(false);
+  const [errorText, setErrorText] = useState("Mic unavailable");
   const [shake, setShake] = useState(0);
   const [absorb, setAbsorb] = useState(0);
   const [fileName, setFileName] = useState("");
@@ -237,9 +246,54 @@ export default function App(): JSX.Element {
     void startFile(file);
   }
 
-  async function startCapture(): Promise<void> {
+  /** enumerateDevices hides labels until a stream is granted, but ids work. */
+  async function listInputs(): Promise<AudioDeviceInfo[]> {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const all = await navigator.mediaDevices.enumerateDevices();
+      return all
+        .filter((d) => d.kind === "audioinput")
+        .map((d) => ({ deviceId: d.deviceId, kind: d.kind, label: d.label }));
+    } catch (e) {
+      window.api.log(`enumerateDevices failed: ${(e as Error)?.name ?? e}`);
+      return [];
+    }
+  }
+
+  async function startCapture(): Promise<void> {
+    // Plain getUserMedia({audio:true}) is not enough on a real desktop: the
+    // default input is often a ghost or paired-but-dead endpoint. Walk the
+    // ranked candidates and keep the first that actually carries signal.
+    const devices = await listInputs();
+    window.api.log(`audio inputs: ${JSON.stringify(devices)}`);
+    const candidates = candidateConstraints(rankDevices(devices));
+    let stream: MediaStream | null = null;
+    let lastError: unknown = null;
+    for (const spec of candidates) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(spec);
+        break;
+      } catch (e) {
+        lastError = e;
+        window.api.log(`getUserMedia failed: ${(e as Error)?.name ?? e}`);
+      }
+    }
+    if (!stream) {
+      const kind = classifyCaptureError(lastError);
+      window.api.log(`capture failed: ${kind}`);
+      setErrorText(captureErrorText(kind));
+      setState("error");
+      window.api.abort();
+      return;
+    }
+    if (!(await probeSignal(stream))) {
+      window.api.log("stream opened but carried no signal");
+      stream.getTracks().forEach((t) => t.stop());
+      setErrorText(captureErrorText("silent"));
+      setState("error");
+      window.api.abort();
+      return;
+    }
+    try {
       streamRef.current = stream;
       const ctx = new AudioContext({ sampleRate: 16000 });
       ctxRef.current = ctx;
@@ -579,7 +633,7 @@ export default function App(): JSX.Element {
           {state === "error" && (
             <div className="row">
               <WaveformSlash size={17} />
-              <span className="err">Mic unavailable</span>
+              <span className="err">{errorText}</span>
             </div>
           )}
         </motion.div>
