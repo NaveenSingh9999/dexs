@@ -1,4 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
+import type { DeliverySummary } from "../core/delivery";
+
+import type { DownloadProgress } from "../main/models";
 
 declare global {
   interface Window {
@@ -20,8 +23,10 @@ const api = {
     ipcRenderer.on("dexs:utterance", (_e, t) => cb(t)),
   onError: (cb: (m: string) => void) =>
     ipcRenderer.on("dexs:error", (_e, m) => cb(m)),
-  onDone: (cb: (back: string) => void) =>
-    ipcRenderer.on("dexs:done", (_e, back) => cb(back)),
+  onDone: (cb: (back: string, result: DeliverySummary | null) => void) =>
+    ipcRenderer.on("dexs:done", (_e, back, result) => cb(back, result)),
+  onSettings: (cb: (s: unknown) => void) =>
+    ipcRenderer.on("dexs:settings", (_e, s) => cb(s)),
   onAnchor: (cb: (slot: { h: string; v: string }) => void) =>
     ipcRenderer.on("dexs:anchor", (_e, slot) => cb(slot)),
   abort: () => ipcRenderer.send("dexs:abort"),
@@ -32,6 +37,17 @@ const api = {
   dragEnd: () => ipcRenderer.send("dexs:drag:end"),
   getSettings: () => ipcRenderer.invoke("dexs:settings"),
   setSettings: (s: unknown) => ipcRenderer.send("dexs:settings:set", s),
+  getHistory: () => ipcRenderer.invoke("dexs:history"),
+  clearHistory: () => ipcRenderer.send("dexs:history:clear"),
+  copyHistory: (id: string) => ipcRenderer.invoke("dexs:history:copy", id),
+  getModels: () => ipcRenderer.invoke("dexs:models"),
+  downloadModel: (id: string) => ipcRenderer.send("dexs:models:download", id),
+  cancelModel: (id: string) => ipcRenderer.send("dexs:models:cancel", id),
+  removeModel: (id: string) => ipcRenderer.send("dexs:models:remove", id),
+  getDiagnostics: () => ipcRenderer.invoke("dexs:diagnostics"),
+  onProgress: (cb: (p: DownloadProgress) => void) =>
+    ipcRenderer.on("dexs:progress", (_e, p) => cb(p)),
+  openMain: () => ipcRenderer.send("dexs:open-main"),
 };
 
 if (process.contextIsolated) {

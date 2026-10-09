@@ -11,18 +11,41 @@ import {
 } from "electron";
 import { join } from "path";
 import { electronApp } from "@electron-toolkit/utils";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
-import { Session, type DoneTarget } from "./session";
 import {
-  defaultSettings,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  appendFileSync,
+} from "fs";
+import { Session, type DoneTarget } from "./session";
+import { createInjector } from "./injector";
+import { ModelDownloader } from "./models";
+import { findModel, isInstalled as isInstalledModel } from "../core/models";
+import { modelsRoot, sherpaVersion } from "./stt";
+import {
+  migrateSettings,
+  pushHistory,
   type DexsSettings,
+  type HistoryEntry,
   type SessionState,
-} from "../core/types";
+} from "../core/settings";
+import type { DeliverySummary } from "../core/delivery";
 
 let overlay: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let session: Session | null = null;
+/** Geometry of the resting/open pill, shared with the renderer. */
+const OPEN_PILL = { width: 66, height: 44 } as const;
+
 let settings: DexsSettings = loadSettings();
+let history: HistoryEntry[] = loadHistory();
+let mainWindow: BrowserWindow | null = null;
+const downloader = new ModelDownloader();
+const recentLogs: { at: number; level: string; line: string }[] = [];
+const LOG_LIMIT = 400;
+let historySeq = 0;
+let resultText = "";
 
 function appIcon(): Electron.NativeImage {
   return nativeImage.createFromPath(
@@ -52,6 +75,74 @@ function slotBounds(
   return { x, y };
 }
 
+/**
+ * Everything the user can see about what happened, newest last. Also appended
+ * to a log file: stdout is buffered when piped, so the Diagnostics pane and
+ * bug reports need a file they can read without waiting on a flush.
+ */
+function note(level: string, line: string): void {
+  const entry = { at: Date.now(), level, line };
+  recentLogs.push(entry);
+  if (recentLogs.length > LOG_LIMIT) recentLogs.shift();
+  try {
+    appendFileSync(
+      join(app.getPath("userData"), "dexs.log"),
+      `${new Date(entry.at).toISOString()} [${level}] ${line}\n`,
+    );
+  } catch {
+    /* non-fatal */
+  }
+}
+
+function applySettings(): void {
+  globalShortcut.unregisterAll();
+  if (!settings.hotkeyEnabled) return;
+  if (
+    process.argv.includes("--settings") ||
+    process.argv.includes("settings")
+  ) {
+    openMainWindow();
+  }
+  if (settings.autoDownloadModels) void autoFetchModels();
+  const ok = globalShortcut.register(settings.hotkey, toggle);
+  if (!ok) note("error", `hotkey already taken: ${settings.hotkey}`);
+  else note("info", `hotkey registered: ${settings.hotkey}`);
+  if (overlay && !overlay.isDestroyed()) {
+    const display = screen.getPrimaryDisplay();
+    const { x: ax, y: ay, width, height } = display.workArea;
+    const cur = overlay.getBounds();
+    const w = Math.min(cur.width, width);
+    const h = Math.min(cur.height, height);
+    const { x, y } = slotBounds(
+      settings.slot.h,
+      settings.slot.v,
+      { x: ax, y: ay, width, height },
+      w,
+      h,
+    );
+    overlay.setBounds({ x, y, width: w, height: h });
+    overlay.webContents.send("dexs:settings", settings);
+  }
+}
+
+/** Fetch any model the user selected but has not installed yet. */
+async function autoFetchModels(): Promise<void> {
+  const root = modelsRoot(settings);
+  for (const spec of findModel(settings.streamingModel)
+    ? [findModel(settings.streamingModel)!]
+    : []) {
+    if (isInstalledModel(spec, root)) continue;
+    try {
+      await downloader.download(spec.id, root, (p) =>
+        overlay?.webContents.send("dexs:progress", p),
+      );
+      note("info", `downloaded ${spec.id}`);
+    } catch (e) {
+      note("error", `${spec.id}: ${(e as Error)?.message ?? e}`);
+    }
+  }
+}
+
 function settingsPath(): string {
   return join(app.getPath("userData"), "settings.json");
 }
@@ -59,15 +150,37 @@ function settingsPath(): string {
 function loadSettings(): DexsSettings {
   try {
     if (existsSync(settingsPath())) {
-      return {
-        ...defaultSettings,
-        ...JSON.parse(readFileSync(settingsPath(), "utf8")),
-      };
+      return migrateSettings(JSON.parse(readFileSync(settingsPath(), "utf8")));
     }
   } catch {
     /* fall through */
   }
-  return { ...defaultSettings };
+  return migrateSettings(undefined);
+}
+
+function historyPath(): string {
+  return join(app.getPath("userData"), "history.json");
+}
+
+function loadHistory(): HistoryEntry[] {
+  try {
+    if (existsSync(historyPath())) {
+      const parsed = JSON.parse(readFileSync(historyPath(), "utf8"));
+      return Array.isArray(parsed) ? (parsed as HistoryEntry[]) : [];
+    }
+  } catch {
+    /* fall through */
+  }
+  return [];
+}
+
+function saveHistory(): void {
+  try {
+    mkdirSync(app.getPath("userData"), { recursive: true });
+    writeFileSync(historyPath(), JSON.stringify(history));
+  } catch {
+    /* non-fatal */
+  }
 }
 
 function saveSettings(): void {
@@ -79,14 +192,58 @@ function saveSettings(): void {
   }
 }
 
+function openMainWindow(): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show();
+    mainWindow.focus();
+    return;
+  }
+  mainWindow = new BrowserWindow({
+    width: 880,
+    height: 620,
+    minWidth: 720,
+    minHeight: 520,
+    show: false,
+    backgroundColor: "#101012",
+    title: "Dexs",
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: join(__dirname, "../preload/index.js"),
+      sandbox: false,
+      contextIsolation: true,
+    },
+  });
+  mainWindow.once("ready-to-show", () => mainWindow?.show());
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
+  mainWindow.webContents.on("did-fail-load", (_e, code, desc, url) => {
+    note("error", `main window failed to load ${url}: ${desc} (${code})`);
+    mainWindow?.show();
+  });
+  mainWindow.webContents.on("render-process-gone", (_e, d) =>
+    note("error", `main window renderer gone: ${d.reason}`),
+  );
+  note("info", "main window opening");
+  const mainUrl = process.env["ELECTRON_RENDERER_URL"]
+    ? `${process.env["ELECTRON_RENDERER_URL"]}/main.html`
+    : `file://${join(__dirname, "../renderer/main.html")}`;
+  note("info", `main window url: ${mainUrl}`);
+  if (process.env["ELECTRON_RENDERER_URL"]) {
+    void mainWindow.loadURL(mainUrl);
+  } else {
+    void mainWindow.loadFile(join(__dirname, "../renderer/main.html"));
+  }
+}
+
 function createOverlay(): void {
   const display = screen.getPrimaryDisplay();
   const { x: ax, y: ay, width, height } = display.workArea;
   overlay = new BrowserWindow({
-    width: 132,
-    height: 40,
-    x: ax + Math.round((width - 132) / 2),
-    y: ay + height - 40,
+    width: OPEN_PILL.width,
+    height: OPEN_PILL.height,
+    x: ax + Math.round((width - OPEN_PILL.width) / 2),
+    y: ay + height - OPEN_PILL.height,
     frame: false,
     transparent: true,
     // Never take keyboard focus: xdotool types into the *focused* window, so
@@ -183,10 +340,17 @@ function createOverlay(): void {
   overlay.webContents.once("did-finish-load", () => {
     overlay?.webContents.send("dexs:anchor", { h: "h-center", v: "v-bottom" });
   });
+  // QA: `dexs --dropdemo` runs a bundled speech clip through the full
+  // pipeline, so dictation can be exercised without a microphone.
+  const search = process.argv.includes("--dropdemo") ? "?dropdemo=1" : "";
   if (process.env["ELECTRON_RENDERER_URL"]) {
-    overlay.loadURL(process.env["ELECTRON_RENDERER_URL"]);
+    overlay.loadURL(
+      `${process.env["ELECTRON_RENDERER_URL"]}/index.html${search}`,
+    );
   } else {
-    overlay.loadFile(join(__dirname, "../renderer/index.html"));
+    void overlay.loadFile(join(__dirname, "../renderer/index.html"), {
+      search,
+    });
   }
 }
 
@@ -206,6 +370,7 @@ function live<T extends unknown[]>(
 function toggle(): void {
   if (!session) {
     const mine = ++generation;
+    resultText = "";
     session = new Session(settings, {
       onState: live(mine, (s: SessionState) =>
         overlay?.webContents.send("dexs:state", s),
@@ -214,15 +379,27 @@ function toggle(): void {
         overlay?.webContents.send("dexs:partial", t),
       ),
       onUtterance: live(mine, (t: string) => {
-        console.log(`[dexs] utterance: ${t}`);
+        note("info", `utterance: ${t}`);
+        resultText = resultText ? `${resultText} ${t}` : t;
         overlay?.webContents.send("dexs:utterance", t);
       }),
       onError: live(mine, (m: string) =>
         overlay?.webContents.send("dexs:error", m),
       ),
-      onDone: live(mine, (b: DoneTarget) =>
-        overlay?.webContents.send("dexs:done", b),
-      ),
+      onDone: live(mine, (b: DoneTarget, result?: DeliverySummary) => {
+        if (result) {
+          note("info", `delivered: ${result.where} — ${result.message}`);
+          history = pushHistory(history, {
+            id: String(++historySeq),
+            at: Date.now(),
+            text: resultText,
+            source: "mic",
+            delivered: result.where,
+          });
+          saveHistory();
+        }
+        overlay?.webContents.send("dexs:done", b, result ?? null);
+      }),
     });
     session.start();
   } else {
@@ -233,15 +410,24 @@ function toggle(): void {
 }
 
 app.whenReady().then(() => {
+  note("info", `argv: ${process.argv.join(" ")}`);
   electronApp.setAppUserModelId("com.dexs.app");
   createOverlay();
   tray = new Tray(appIcon().resize({ width: 22, height: 22 }));
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: "Toggle dictation", click: toggle },
+      { label: "Settings…", click: () => openMainWindow() },
       { label: "Quit", click: () => app.quit() },
     ]),
   );
+  if (
+    process.argv.includes("--settings") ||
+    process.argv.includes("settings")
+  ) {
+    openMainWindow();
+  }
+  if (settings.autoDownloadModels) void autoFetchModels();
   const ok = globalShortcut.register(settings.hotkey, toggle);
   if (!ok) console.error(`hotkey conflict: ${settings.hotkey}`);
 
@@ -249,10 +435,74 @@ app.whenReady().then(() => {
     session?.feed(new Int16Array(buf));
   });
   ipcMain.handle("dexs:settings", () => settings);
-  ipcMain.on("dexs:settings:set", (_e, s: DexsSettings) => {
-    settings = s;
+  ipcMain.on("dexs:settings:set", (_e, s: unknown) => {
+    settings = migrateSettings(s);
     saveSettings();
+    applySettings();
+    if (settings.autoDownloadModels) void autoFetchModels();
   });
+  ipcMain.handle("dexs:history", () => history);
+  ipcMain.on("dexs:history:clear", () => {
+    history = [];
+    saveHistory();
+  });
+  ipcMain.handle("dexs:history:copy", (_e, id: string) => {
+    const entry = history.find((h) => h.id === id);
+    if (entry) void createInjector().copy(entry.text);
+  });
+  ipcMain.handle("dexs:models", () =>
+    downloader
+      .statuses(modelsRoot(settings))
+      .map((s) => ({ ...s, spec: findModel(s.id) })),
+  );
+  ipcMain.on("dexs:models:download", (_e, id: string) => {
+    void downloader
+      .download(id, modelsRoot(settings), (p) => {
+        overlay?.webContents.send("dexs:progress", p);
+        mainWindow?.webContents.send("dexs:progress", p);
+      })
+      .then(() => {
+        mainWindow?.webContents.send("dexs:progress", {
+          modelId: id,
+          file: "",
+          progress: 1,
+          receivedBytes: 0,
+          totalBytes: 0,
+          done: true,
+          installed: true,
+        });
+      })
+      .catch((e: Error) => {
+        mainWindow?.webContents.send("dexs:progress", {
+          modelId: id,
+          file: "",
+          progress: 0,
+          receivedBytes: 0,
+          totalBytes: 0,
+          done: true,
+          error: e.message,
+        });
+      });
+  });
+  ipcMain.on("dexs:models:cancel", (_e, id: string) => downloader.cancel(id));
+  ipcMain.on("dexs:models:remove", (_e, id: string) => {
+    downloader.remove(id, modelsRoot(settings));
+  });
+  ipcMain.handle("dexs:diagnostics", () => ({
+    platform: process.platform,
+    arch: process.arch,
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    node: process.versions.node,
+    modelsDir: modelsRoot(settings),
+    hotkey: settings.hotkey,
+    hotkeyRegistered: globalShortcut.isRegistered(settings.hotkey),
+    sherpa: sherpaVersion(),
+    session: session?.state ?? "idle",
+    lines: recentLogs,
+    settings,
+  }));
+  ipcMain.on("dexs:open-main", () => openMainWindow());
   // Windows can hand the renderer a denied or prompt-less permission state;
   // grant media explicitly for our own overlay so input detection is not the
   // thing that fails.
@@ -269,7 +519,10 @@ app.whenReady().then(() => {
 
   ipcMain.on("dexs:toggle", toggle);
   // Renderer diagnostics (console output is not forwarded to the terminal).
-  ipcMain.on("dexs:log", (_e, m: string) => console.log(`[renderer] ${m}`));
+  ipcMain.on("dexs:log", (_e, m: string) => {
+    note("renderer", m);
+    if (settings.verboseLogging) console.log(`[renderer] ${m}`);
+  });
   // The renderer aborts (e.g. mic unavailable). Tear the session down without
   // emitting working/done, so the next toggle starts a fresh listen instead of
   // replaying the previous session's stop animation.

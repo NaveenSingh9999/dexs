@@ -9,7 +9,10 @@ import {
   Pause,
   Play,
 } from "@phosphor-icons/react";
+import { Stop } from "@phosphor-icons/react";
 import { barHeight } from "./wave";
+import { pillView, textOpacity } from "./pillView";
+import "@fontsource-variable/inter";
 import {
   candidateConstraints,
   captureErrorText,
@@ -38,18 +41,12 @@ const smooth = {
   ease: [0.32, 0.72, 0, 1],
 } as const;
 
-function pillWidth(
-  state: State,
-  hover: boolean,
-  playing: boolean,
-  dock: boolean,
-): number {
-  if (playing) return 236;
-  if (state === "idle") return hover || dock ? 84 : 36;
-  if (state === "listening") return 132;
-  if (state === "working") return 64;
-  if (state === "done") return 88;
-  return 110; // error
+/** The work area the pill is clamped against. */
+function screenBox(): { width: number; height: number } {
+  return {
+    width: Math.max(window.screen?.width ?? 1280, 640),
+    height: Math.max(window.screen?.height ?? 800, 480),
+  };
 }
 
 export default function App(): JSX.Element {
@@ -67,6 +64,14 @@ export default function App(): JSX.Element {
   const stateRef = useRef<State>("idle");
   const [source, setSource] = useState<Source>("mic");
   const [dockArmed, setDockArmed] = useState(false);
+  const [partial, setPartial] = useState("");
+  const [settled, setSettled] = useState<string[]>([]);
+  const [notice, setNotice] = useState("");
+  const [pillSettings, setPillSettings] = useState({
+    dynamicSize: true,
+    dimPartials: true,
+    showStopButton: true,
+  });
   const [errorText, setErrorText] = useState("Mic unavailable");
   const [shake, setShake] = useState(0);
   const [absorb, setAbsorb] = useState(0);
@@ -407,9 +412,35 @@ export default function App(): JSX.Element {
   }, [state]);
 
   useEffect(() => {
+    void window.api.getSettings().then((raw) => {
+      const st = raw as {
+        dynamicSize: boolean;
+        dimPartials: boolean;
+        showStopButton: boolean;
+      };
+      setPillSettings({
+        dynamicSize: st.dynamicSize,
+        dimPartials: st.dimPartials,
+        showStopButton: st.showStopButton,
+      });
+    });
+    window.api.onSettings((s) => {
+      setPillSettings({
+        dynamicSize: s.dynamicSize,
+        dimPartials: s.dimPartials,
+        showStopButton: s.showStopButton,
+      });
+    });
     window.api.onState((s: string) => setState(s as State));
-    window.api.onDone((back: string) => {
+    window.api.onPartial((t: string) => setPartial(t));
+    window.api.onUtterance((t: string) =>
+      setSettled((prev) => [...prev, t].slice(-6)),
+    );
+    window.api.onDone((back: string, result) => {
       if (stateRef.current === "error" || stateRef.current === "idle") return;
+      setNotice(result?.message ?? "");
+      setPartial("");
+      setSettled([]);
       setDoneBack(back === "listening" ? "listening" : "idle");
       setState("done");
     });
@@ -510,14 +541,35 @@ export default function App(): JSX.Element {
     return () => cancelAnimationFrame(raf);
   }, []);
 
+  const view = pillView({
+    state,
+    hover,
+    playing,
+    settled: settled.join(" "),
+    partial,
+    error: errorText,
+    notice,
+    settings: {
+      dynamicSize: pillSettings.dynamicSize,
+      dimPartials: pillSettings.dimPartials,
+      showStopButton: pillSettings.showStopButton,
+    },
+    viewport: screenBox(),
+  });
+  useEffect(() => {
+    window.api.resize(view.windowSize.width, view.windowSize.height);
+  }, [view.windowSize.width, view.windowSize.height]);
+
   return (
     <>
       <div className={`container ${slot.h} ${slot.v}`}>
         {/* Bottom STT pill */}
         <motion.div
           animate={{
-            width: pillWidth(state, hover, playing, dockArmed),
-            height: state === "idle" && !hover ? 12 : 40,
+            width: view.windowSize.width,
+            height: view.windowSize.height,
+            scaleX: view.pillScale.x,
+            scaleY: view.pillScale.y,
           }}
           transition={smooth}
           className={`pill ${state} ${dockArmed ? "dock" : ""} ${shake ? "shake" : ""} ${absorb ? "absorb" : ""} ${playing ? "playing" : ""}`}
@@ -533,18 +585,20 @@ export default function App(): JSX.Element {
         >
           <style>{css}</style>
           {dockArmed && <span key={`dock${shake}`} className="dock-veil" />}
-          {state === "idle" && !hover && (
-            <motion.span
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="mini-handle"
-            />
-          )}
-          {state === "idle" && hover && (
+          <motion.span
+            className="mini-handle"
+            animate={{ opacity: view.showHandle ? 1 : 0 }}
+            transition={smooth}
+          />
+          {state === "idle" && (
             <motion.div
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="row"
+              animate={{
+                opacity: hover ? 1 : 0,
+                scale: hover ? 1 : 0.82,
+              }}
+              transition={smooth}
+              className="row controls"
+              style={{ pointerEvents: hover ? "auto" : "none" }}
             >
               <TrayButton
                 label="Transcribe"
@@ -552,7 +606,10 @@ export default function App(): JSX.Element {
               >
                 <Microphone size={17} weight="duotone" />
               </TrayButton>
-              <TrayButton label="Settings" onClick={() => {}}>
+              <TrayButton
+                label="Settings"
+                onClick={() => window.api.openMain()}
+              >
                 <GearSix size={17} weight="duotone" />
               </TrayButton>
             </motion.div>
@@ -596,16 +653,37 @@ export default function App(): JSX.Element {
             </div>
           )}
           {state === "listening" && !playing && (
-            <div className="row wave">
-              {Array.from({ length: 7 }).map((_, i) => (
-                <span
-                  key={i}
-                  ref={(el) => {
-                    barsRef.current[i] = el;
-                  }}
-                  style={{ height: 4 }}
-                />
-              ))}
+            <div className="live-row">
+              <div className="row wave">
+                {Array.from({ length: 7 }).map((_, i) => (
+                  <span
+                    key={i}
+                    ref={(el) => {
+                      barsRef.current[i] = el;
+                    }}
+                    style={{ height: 4 }}
+                  />
+                ))}
+              </div>
+              {view.showText && (
+                <div
+                  className="live-text"
+                  style={{ opacity: textOpacity(view) }}
+                >
+                  <span className="settled">{settled.join(" ")}</span>
+                  {partial && <span className="partial">{partial}</span>}
+                </div>
+              )}
+              {view.showStop && (
+                <button
+                  className="ctl stop"
+                  aria-label="Stop dictation"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => window.api.toggle()}
+                >
+                  <Stop size={13} weight="fill" />
+                </button>
+              )}
             </div>
           )}
           {state === "working" && (
@@ -620,20 +698,21 @@ export default function App(): JSX.Element {
           )}
           {state === "done" && (
             <motion.div
-              initial={{ opacity: 0, scale: 0.85 }}
-              animate={{ opacity: 1, scale: 1 }}
+              initial={{ opacity: 0, y: 3 }}
+              animate={{ opacity: 1, y: 0 }}
               transition={smooth}
-              className="row"
+              className="row done-row"
             >
               <span className="done-check">
-                <CheckCircle size={18} weight="duotone" />
+                <CheckCircle size={16} weight="duotone" />
               </span>
+              {view.notice && <span className="notice">{view.notice}</span>}
             </motion.div>
           )}
           {state === "error" && (
             <div className="row">
               <WaveformSlash size={17} />
-              <span className="err">{errorText}</span>
+              <span className="err">{view.error}</span>
             </div>
           )}
         </motion.div>
@@ -677,6 +756,9 @@ const css = `
 .container.v-bottom { justify-content: flex-end; }
 .pill {
   padding: 0; overflow: hidden;
+  transform-origin: center center;
+  will-change: transform, width, height;
+  contain: layout paint;
   display: flex; align-items: center; justify-content: center;
   pointer-events: auto;
   border-radius: 28px;
@@ -684,13 +766,39 @@ const css = `
   backdrop-filter: blur(20px) saturate(140%);
   -webkit-backdrop-filter: blur(20px) saturate(140%);
   border: 1px solid rgba(255,255,255,0.14);
-  box-shadow: 0 4px 18px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.12);
+  box-shadow: 0 2px 10px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.12);
   color: #fff; cursor: grab; user-select: none;
   transform: translateZ(0);
   touch-action: none;
 }
-.mini-handle { width: 22px; height: 4px; border-radius: 999px; background: rgba(255,255,255,0.16); }
+.pill { font-family: "Inter Variable", Inter, system-ui, sans-serif; font-feature-settings: "ss01", "cv05"; }
+.live-row { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 0 14px; }
+.live-text {
+  flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 7px;
+  font-size: 13px; line-height: 19px; letter-spacing: -0.005em;
+  white-space: nowrap; overflow: hidden;
+  mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+}
+.live-text .settled { color: rgba(255,255,255,0.95); }
+.live-text .pending .partial, .live-text.pending .partial { color: rgba(255,255,255,0.5); }
+.live-text .partial { color: rgba(255,255,255,0.62); }
+.live-text.pending .settled:empty::after { content: ""; }
+.ctl.stop {
+  width: 26px; height: 26px; border-radius: 999px;
+  background: rgba(255,255,255,0.14); color: #fff;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: none; transition: background 0.18s ease;
+}
+.ctl.stop:hover { background: rgba(255,255,255,0.26); }
+.done-row { gap: 7px; }
+.notice { font-size: 11.5px; color: rgba(255,255,255,0.72); white-space: nowrap; }
+.mini-handle { position: absolute; left: 50%; top: 50%; width: 22px; height: 4px; margin: -2px 0 0 -11px; border-radius: 999px; background: rgba(255,255,255,0.16); }
+.ctl { -webkit-app-region: no-drag; }
+.tray-hit { position: absolute; inset: 0; pointer-events: none; }
+.tray-hit.on { pointer-events: auto; }
 .row { display: flex; align-items: center; gap: 8px; }
+.row.controls { gap: 6px; position: absolute; inset: 0; justify-content: center; align-items: center; }
 .err { font-size: 11px; opacity: 0.8; }
 .wave { height: 24px; align-items: center; gap: 3px; }
 .wave span { width: 3px; border-radius: 2px; background: linear-gradient(180deg,#FF9A8B,#FF4634); display: inline-block; }
@@ -701,7 +809,7 @@ const css = `
 }
 .pill.done {
   border-color: rgba(255,255,255,0.28);
-  box-shadow: 0 4px 18px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.12);
+  box-shadow: 0 2px 10px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.12);
 }
 .pill.error { border-color: rgba(255,110,95,0.28); }
 .pill.dock {

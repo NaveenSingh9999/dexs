@@ -13,6 +13,7 @@ if (!window.api) {
     onUtterance: () => {},
     onError: () => {},
     onDone: () => {},
+    onSettings: () => {},
     onAnchor: () => {},
     abort: () => {},
     log: () => {},
@@ -22,6 +23,16 @@ if (!window.api) {
     dragEnd: () => {},
     getSettings: async () => ({}),
     setSettings: () => {},
+    getHistory: async () => [],
+    clearHistory: () => {},
+    copyHistory: async () => {},
+    getModels: async () => [],
+    downloadModel: () => {},
+    cancelModel: () => {},
+    removeModel: () => {},
+    getDiagnostics: async () => ({ lines: [] }),
+    onProgress: () => {},
+    openMain: () => {},
   };
 }
 

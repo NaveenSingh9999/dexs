@@ -1,6 +1,7 @@
 import os from "os";
 import path from "path";
-import type { DexsSettings } from "../core/types";
+import { existsSync } from "fs";
+import type { DexsSettings } from "../core/settings";
 
 export interface SttChunk {
   text: string;
@@ -33,11 +34,44 @@ function getSherpa(): SherpaModule {
   return sherpaCached;
 }
 
-function modelsRoot(settings: DexsSettings): string {
-  return settings.modelsDir || path.join(os.homedir(), ".dexs", "models");
+/** The native addon version, or a readable reason it is unusable. */
+export function sherpaVersion(): string {
+  try {
+    getSherpa();
+    return "loaded";
+  } catch (e) {
+    return `unavailable (${(e as Error)?.message ?? e})`;
+  }
+}
+
+/**
+ * Where the models live. An installed build carries them in
+ * `resources/models` (the installer downloads them during packaging), so a
+ * fresh install dictates straight away; otherwise they go in the user's home
+ * folder and are fetched on first use.
+ */
+export function modelsRoot(settings: DexsSettings): string {
+  if (settings.modelsDir) return settings.modelsDir;
+  const bundled = bundledModelsDir();
+  if (bundled) return bundled;
+  return path.join(os.homedir(), ".dexs", "models");
+}
+
+/** The bundled model directory, or null when this is not a packaged build. */
+export function bundledModelsDir(): string | null {
+  if (process.defaultApp && !process.resourcesPath?.length) return null;
+  const candidates = [
+    process.resourcesPath
+      ? path.join(process.resourcesPath, "models")
+      // Running straight from a repo build: sit next to out/renderer.
+      : path.join(__dirname, "..", "..", "models"),
+  ];
+  return candidates.find((dir) => existsSync(dir)) ?? null;
 }
 
 interface SherpaModule {
+  /** Present on sherpa-onnx-node builds; absent on some older ones. */
+  version?: string;
   OnlineRecognizer: new (config: unknown) => OnlineRecognizer;
   OfflineRecognizer: new (config: unknown) => OfflineRecognizer;
   readWave: (
