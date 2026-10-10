@@ -1,6 +1,6 @@
 {
   "name": "dexs",
-  "version": "1.1.1",
+  "version": "1.1.4",
   "description": "Offline voice-to-action desktop tool (VoiceOS alternative)",
   "main": "./out/main/index.js",
   "author": "example.com",
