@@ -54,6 +54,7 @@ jobs:
         with:
           name: dexs-${{ matrix.os }}
           path: |
+            dist/*.msi
             dist/*.exe
             dist/*.AppImage
             dist/*.deb
