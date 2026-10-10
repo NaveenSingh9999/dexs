@@ -20,10 +20,6 @@ win:
   # SmartScreen "this app might harm your computer" gate that a downloaded
   # .exe trips.
   target: msi
-  # Code signing. Leave CSC_LINK empty in the repo; CI passes the certificate
-  # from secrets when one is configured, and builds unsigned otherwise.
-  signtoolOptions:
-    sign: true
   artifactName: ${name}-${version}.${ext}
 msi:
   oneClick: false
