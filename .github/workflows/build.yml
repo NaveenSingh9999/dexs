@@ -4,10 +4,6 @@ on:
     branches: [main]
     tags: ['v*']
   workflow_dispatch:
-
-permissions:
-  contents: write
-
 jobs:
   typecheck-test:
     runs-on: ubuntu-latest
@@ -19,63 +15,65 @@ jobs:
       - run: npm run typecheck
       - run: npx vitest run
 
-  # Bumping the version and tagging is what makes a release happen, so it runs
-  # first on a main push and never on a tag push (which would loop forever).
+  # A push to main is what makes a release: bump the version, commit, tag. The
+  # tag then drives the package and release jobs, so nothing is packaged twice
+  # and a tag push never loops back into this job.
   version:
     needs: typecheck-test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     outputs:
       version: ${{ steps.bump.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0, fetch-tags: true }
+        with: { fetch-depth: 0 }
       - id: bump
         run: |
+          git fetch --tags
           LATEST=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo 'v1.0.0')
           NEXT=$(echo "$LATEST" | awk -F. '{$NF++; print}' OFS=.)
-          echo "version=$NEXT" >> $GITHUB_OUTPUT
-          git config user.name  "ci"
-          git config user.email "ci@users.noreply.github.com"
-          sed -i "s/\"version\": \".*\"/\"version\": \"$NEXT\"/" package.json
-          npm install --package-lock-only --ignore-scripts --silent
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "releasing $NEXT"
+          git config user.name  "dexs-ci"
+          git config user.email "dexs-ci@users.noreply.github.com"
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='$NEXT';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')"
+          npm install --package-lock-only --ignore-scripts
           git add package.json package-lock.json
-          git commit -m "release $NEXT [skip ci]"
+          git commit -m "release $NEXT"
           git tag -a "$NEXT" -m "release $NEXT"
           git push --follow-tags
 
-  # Runs for a tag push (created by the version job) or a manual run. Building
-  # on the branch push as well would package the same commit twice.
   package:
     needs: typecheck-test
+    runs-on: ${{ matrix.os }}
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     strategy:
       matrix:
         os: [windows-latest, ubuntu-latest, ubuntu-24.04-arm]
-    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
-      # Windows only: put the code signing certificate on disk. When
-      # WIN_CERTIFICATE_B64 is empty the build is unsigned, exactly as before.
+      # Windows code signing. When WIN_CERTIFICATE_B64 has a base64 .pfx in it
+      # the MSI is signed with the same certificate the suite expects; with no
+      # secret the build is unsigned, exactly as it was before.
       - name: Signing certificate
-        if: runner.os == 'Windows' && secrets.WIN_CERTIFICATE != ''
-        shell: pwsh
+        if: runner.os == 'Windows' && secrets.WIN_CERTIFICATE_B64 != ''
+        shell: bash
         run: |
-          $bytes = [Convert]::FromBase64String("${{ secrets.WIN_CERTIFICATE }}")
-          [IO.File]::WriteAllBytes("${{ runner.temp }}\cert.pfx", $bytes)
-          echo "CSC_LINK=${{ runner.temp }}\cert.pfx" >> $env:GITHUB_ENV
-          echo "CSC_KEY_PASSWORD=${{ secrets.WIN_CERTIFICATE_PASSWORD }}" >> $env:GITHUB_ENV
-          echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> $env:GITHUB_ENV
-      # Linux only: patchelf is needed for the sherpa native addon's RPATH.
+          echo "${{ secrets.WIN_CERTIFICATE_B64 }}" | base64 -d > "${{ runner.temp }}/cert.pfx"
+          echo "CSC_LINK=${{ runner.temp }}/cert.pfx" >> "$GITHUB_ENV"
+          echo "CSC_KEY_PASSWORD=${{ secrets.WIN_CERTIFICATE_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+      # patchelf is what lets the packaged app find libonnxruntime.so beside the
+      # sherpa addon; Linux only, since PE files carry no RPATH.
       - name: Install patchelf
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y patchelf
       - run: npm ci
       - run: npx electron-vite build
-      # The afterPack hook fetches the speech models so the installers ship
-      # with everything dictation needs.
+      # afterPack downloads the speech models into resources/models, so the
+      # installers work the moment they are launched.
       - run: npx electron-builder --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
@@ -91,23 +89,19 @@ jobs:
 
   release:
     needs: [package, version]
-    if: always() && needs.package.result == 'success' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    if: needs.package.result == 'success' && needs.version.result == 'success' && startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
-        with:
-          pattern: dexs-*
-          path: artifacts
-          merge-multiple: true
-      - name: Publish (create, or replace assets on an existing release)
+        with: { pattern: 'dexs-*', path: artifacts, merge-multiple: true }
+      - name: Publish (create the release, or replace its assets if it exists)
         run: |
           gh release create "$GITHUB_REF_NAME" artifacts/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "Dexs $GITHUB_REF_NAME" \
             --generate-notes \
-            --verify-tag \
           || gh release upload "$GITHUB_REF_NAME" artifacts/* --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
